@@ -47,6 +47,7 @@ class Main:
 
 
     def handle_detection_result(self, detection_result, output_image, timestamp_ms):
+        #print("timestamp", timestamp_ms)
         frame = output_image.numpy_view()
         h,w,_ = frame.shape
 
@@ -54,6 +55,11 @@ class Main:
             nose = person[0]
             left_wrist = person[1]
             right_wrist = person[2]
+            nose_val = int(nose.x * 50)
+            if nose_val < 0: nose_val = 0
+            if nose_val > 50: nose_val = 50
+
+            print((" " * nose_val) + "*" + ((51 - nose_val) * " "), end="\r")
 
             if not self.headless:
                 x, y = int(nose.x*w), int(nose.y*h)
