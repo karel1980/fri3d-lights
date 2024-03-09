@@ -2,7 +2,7 @@
 from collections import OrderedDict
 import numpy as np
 
-class PeopleTracker:
+class Tracker:
     def __init__(self, max_disappeared=50):
         self.next_person_id = 0
         self.objects = OrderedDict()
@@ -18,17 +18,23 @@ class PeopleTracker:
         del self.objects[person_id]
         del self.disappeared[person_id]
 
+    def handle_present(self, person_id):
+        self.disappeared[person_id] = 0
+
+    def handle_disappeared(self, person_id):
+        self.disappeared[person_id] += 1
+
+        if self.disappeared[person_id] > self.max_disappeared:
+            self.deregister(person_id)
+
     def update(self, centroids):
         if len(centroids) == 0:
             for person_id in list(self.disappeared.keys()):
-                self.disappeared[person_id] += 1
-
-                if self.disappeared[person_id] > self.max_disappeared:
-                    self.deregister(person_id)
+                self.handle_disappeared(person_id)
 
             return self.objects
 
-        input_centroids = np.array(centroids, dtype="int")
+        input_centroids = np.array(centroids, dtype=np.float32)
 
         if len(self.objects) == 0:
             for i in range(0, len(input_centroids)):
@@ -55,7 +61,7 @@ class PeopleTracker:
 
                 person_id = person_ids[row]
                 self.objects[person_id] = input_centroids[col]
-                self.disappeared[person_id] = 0
+                self.handle_present(person_id)
 
                 used_rows.add(row)
                 used_cols.add(col)
@@ -66,10 +72,7 @@ class PeopleTracker:
             if D.shape[0] >= D.shape[1]:
                 for row in unused_rows:
                     person_id = person_ids[row]
-                    self.disappeared[person_id] += 1
-
-                    if self.disappeared[person_id] > self.max_disappeared:
-                        self.deregister(person_id)
+                    self.handle_disappeared(person_id)
             else:
                 for col in unused_cols:
                     self.register(input_centroids[col])

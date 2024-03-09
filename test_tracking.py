@@ -3,9 +3,9 @@ from tracking import *
 import unittest
 
 # Define a test case class that inherits from unittest.TestCase
-class TestPeopleTracker(unittest.TestCase):
+class TestTracker(unittest.TestCase):
     def setUp(self):
-        self.tracker = PeopleTracker()
+        self.tracker = Tracker()
 
     def test_one_person(self):
         people = self.tracker.update([(10,10)])
