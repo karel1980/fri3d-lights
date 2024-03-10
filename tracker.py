@@ -9,8 +9,8 @@ class Tracker:
         self.disappeared = OrderedDict()
         self.max_disappeared = max_disappeared
 
-    def register(self, centroid):
-        self.objects[self.next_person_id] = centroid
+    def register(self, landmarks):
+        self.objects[self.next_person_id] = landmarks
         self.disappeared[self.next_person_id] = 0
         self.next_person_id += 1
 
@@ -27,27 +27,27 @@ class Tracker:
         if self.disappeared[person_id] > self.max_disappeared:
             self.deregister(person_id)
 
-    def update(self, centroids):
-        if len(centroids) == 0:
+    def update(self, detection_result):
+        landmarks = detection_result.pose_landmarks
+        if len(landmarks) == 0:
             for person_id in list(self.disappeared.keys()):
                 self.handle_disappeared(person_id)
 
             return self.objects, self.disappeared
 
-        input_centroids = np.array(centroids, dtype=np.float32)
-
         if len(self.objects) == 0:
-            for i in range(0, len(input_centroids)):
-                self.register(input_centroids[i])
+            for i in range(0, len(landmarks)):
+                self.register(landmarks[i])
 
         else:
             person_ids = list(self.objects.keys())
-            person_centroids = list(self.objects.values())
+            person_landmarks = list(self.objects.values())
 
-            D = np.zeros((len(person_centroids), len(input_centroids)), dtype=int)
-            for i in range(len(person_centroids)):
-                for j in range(len(input_centroids)):
-                    D[i, j] = np.linalg.norm(person_centroids[i] - input_centroids[j])
+            D = np.zeros((len(person_landmarks), len(landmarks)), dtype=int)
+            # Calculates the distance from each person to each detection result
+            for i in range(len(person_landmarks)):
+                for j in range(len(landmarks)):
+                    D[i, j] = np.linalg.norm(person_landmarks[i][0].x - landmarks[j][0].x)
 
             rows = D.min(axis=1).argsort()
             cols = D.argmin(axis=1)[rows]
@@ -60,7 +60,7 @@ class Tracker:
                     continue
 
                 person_id = person_ids[row]
-                self.objects[person_id] = input_centroids[col]
+                self.objects[person_id] = landmarks[col]
                 self.handle_present(person_id)
 
                 used_rows.add(row)

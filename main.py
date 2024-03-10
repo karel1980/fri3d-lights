@@ -25,12 +25,12 @@ class PeopleReporter:
         for p_id in to_remove:
             del self.people[p_id]
 
-        for p_id, position in objects.items():
+        for p_id, landmarks in objects.items():
             if p_id not in self.people:
                 # Initial person
-                self.people[p_id] = Person(p_id, random_color(), position, 1.0, disappeared)
+                self.people[p_id] = Person(p_id, random_color(), landmarks, 1.0, disappeared)
             else:
-                self.people[p_id].position = position
+                self.people[p_id].landmarks = landmarks
                 self.people[p_id].disappeared = disappeared.get(p_id, 50)
 
         return self.people.values()
@@ -42,7 +42,7 @@ class BlobArtist:
         blobs = []
 
     def update(self, people):
-        return [(p.color, p.position, 0.03) for p in people]
+        return [(p.color, p.landmarks[0].x, 0.03) for p in people]
 
 
 class LedVisualizer:
@@ -52,7 +52,7 @@ class LedVisualizer:
 
     def update(self, blobs):
         colors = np.array([ b[0] for b in blobs ])
-        intensity = np.array([ gauss_curve(blob[1], blob[2], np.linspace(0, 1, self.lights.count)) for person in people.values() ])
+        intensity = np.array([ gauss_curve(blob[1], blob[2], np.linspace(0, 1, self.lights.count)) for blob in blobs ])
 
         # Create a n x 3 array where n is the number of leds, and 3 are the R,G,B channels
         led_array = (colors[:,:,np.newaxis] * intensity[:,np.newaxis,:]).max(axis=0).T.astype(np.uint8)
@@ -66,28 +66,31 @@ class ImshowVisualizer:
         self.height = height
 
     def update(self, blobs):
-        colors = np.array([ b[0] for b in blobs ])
-        intensity = np.array([ gauss_curve(blob[1], blob[2], np.linspace(0, 1, self.width)) for blob in blobs ])
+        image = np.zeros((self.height,self.width,3),np.uint8)
 
-        # Create a n x 3 array where n is the number of leds, and 3 are the R,G,B channels
-        led_array = (colors[:,:,np.newaxis] * intensity[:,np.newaxis,:]).max(axis=0).T.astype(np.uint8)
-        image = np.repeat(led_array[:,np.newaxis,:], self.height, axis = 1).transpose(1,0,2)
+        for blob in blobs:
+            color = blob[0]
+            intensity = gauss_curve(blob[1], blob[2], np.linspace(0, 1, self.width))
+
+            layer = (color.reshape(3,1) * intensity).astype(np.uint8).T
+            layer = np.repeat(layer[:,np.newaxis,:], self.height, axis=1).transpose(1,0,2)
+            image = np.maximum(image, layer)
         
         cv2.imshow('foo', image)
 
 class Person:
-    def __init__(self, p_id, color, position, intensity, disappeared = 0):
+    def __init__(self, p_id, color, landmarks, intensity, disappeared = 0):
         self.p_id = p_id
         self.color = color
-        self.position = position
+        self.landmarks = landmarks
         self.intensity = intensity
         self.disappeared = disappeared
 
     def __repr__(self):
-        return f"{self.p_id} c {self.color} p {self.position} i {self.intensity} d {self.disappeared}"
+        return f"{self.p_id} c {self.color} lm {self.landmarks} i {self.intensity} d {self.disappeared}"
 
     def __str__(self):
-        return f"Person {self.p_id} color {self.color} position {self.position} disappeared {self.disappeared}"
+        return f"Person {self.p_id} color {self.color} landmarks {self.landmarks} disappeared {self.disappeared}"
 
 
 def gauss_curve(mean, stdev, x):
@@ -109,7 +112,7 @@ class Main:
         self.visualizer = visualizer
 
     def update(self, detection_result, output_image, timestamp_ms):
-        result = tracker.update([ lm[0].x for lm in detection_result.pose_landmarks ])
+        result = tracker.update(detection_result)
         #print("tracker:", result)
         result = self.people_reporter.update(result)
         #print("people:", result)
