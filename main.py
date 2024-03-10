@@ -42,7 +42,9 @@ class BlobArtist:
         blobs = []
 
     def update(self, people):
+        # TODO: smooth changes using SMA, EMA or rate limiting
         noses = [(p.color, p.landmarks[0].x, 0.03) for p in people]
+
         #lefts = [(p.color, p.landmarks[15].x, 0.03) for p in people if p.landmarks[15].presence > .3 and p.landmarks[15].visibility > .3]
         #rights = [(p.color, p.landmarks[16].x, 0.03) for p in people if p.landmarks[16].presence > .3 and p.landmarks[16].visibility > .3]
         #return noses + lefts + rights
@@ -92,10 +94,10 @@ class Person:
         self.disappeared = disappeared
 
     def __repr__(self):
-        return f"{self.p_id} c {self.color} lm {self.landmarks} i {self.intensity} d {self.disappeared}"
+        return f"{self.p_id} c {self.color} i {self.intensity} d {self.disappeared}"
 
     def __str__(self):
-        return f"Person {self.p_id} color {self.color} landmarks {self.landmarks} disappeared {self.disappeared}"
+        return f"Person {self.p_id} color {self.color} disappeared {self.disappeared}"
 
 
 def gauss_curve(mean, stdev, x):
@@ -134,5 +136,5 @@ if __name__=="__main__":
     leds = ImshowVisualizer()
 
     main = Main(tracker, people_reporter, blob_artist, leds)
-    Pose(num_poses = 1, callback = main.update).run()
+    Pose(num_poses = 2, callback = main.update).run()
 

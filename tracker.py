@@ -75,6 +75,6 @@ class Tracker:
                     self.handle_disappeared(person_id)
             else:
                 for col in unused_cols:
-                    self.register(input_centroids[col])
+                    self.register(landmarks[col])
 
         return self.objects, self.disappeared
