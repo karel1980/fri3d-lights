@@ -42,7 +42,12 @@ class BlobArtist:
         blobs = []
 
     def update(self, people):
-        return [(p.color, p.landmarks[0].x, 0.03) for p in people]
+        noses = [(p.color, p.landmarks[0].x, 0.03) for p in people]
+        #lefts = [(p.color, p.landmarks[15].x, 0.03) for p in people if p.landmarks[15].presence > .3 and p.landmarks[15].visibility > .3]
+        #rights = [(p.color, p.landmarks[16].x, 0.03) for p in people if p.landmarks[16].presence > .3 and p.landmarks[16].visibility > .3]
+        #return noses + lefts + rights
+
+        return noses
 
 
 class LedVisualizer:
