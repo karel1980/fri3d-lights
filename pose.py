@@ -21,10 +21,11 @@ import numpy as np
 
 
 class Pose:
-    def __init__(self, headless=True, callback = None):
+    def __init__(self, headless=True, callback = None, num_poses = 1):
         self.headless = headless
         self.callback = callback
         self.img = None
+        self.num_poses = num_poses
         self.cap = cv2.VideoCapture(0)
 
     def draw_landmarks_on_image(self, rgb_image, detection_result):
@@ -60,7 +61,7 @@ class Pose:
 
     def run(self):
         options = PoseLandmarkerOptions(
-            num_poses=1,
+            num_poses=self.num_poses,
             base_options=BaseOptions(model_asset_path=model_path),
             running_mode=VisionRunningMode.LIVE_STREAM,
             result_callback=self.handle_detection_result)

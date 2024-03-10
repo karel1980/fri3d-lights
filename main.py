@@ -10,70 +10,77 @@ import colorsys
 import numpy as np
 
 class Main:
-    def __init__(self):
+    def __init__(self, num_poses = 2):
         self.tracker = Tracker()
         self.indicators = []
-        self.pose = Pose(callback = self.update_tracker)
+        self.pose = Pose(callback = self.update_tracker, num_poses = num_poses)
         self.lights = Lights()
 
     def run(self):
         # TODO: start a separate thread that will update the leds
-        thread = threading.Thread(target=self.update_lights)
+        thread = threading.Thread(target=self.lights_mainloop)
         thread.start()
         self.pose.run()
 
-    def update_lights(self):
-        i = 0
+    def lights_mainloop(self):
         people = dict()
         while True:
-            # Update states
-            objects = self.tracker.objects.copy()
-            disappeared = self.tracker.disappeared.copy()
 
-            # NOTE: in edge cases, the keys of disappeared will not contain all keys that are in objects
-            # this means the person was removed later, or was only just created.
-            # TODO: Think about how to treat this case, or try to avoid it
-            #print(objects, disappeared)
+            self.update_people(people)
 
-            # Remove people that disappeared from tracker
-            to_remove = set()
-            for p_id in people.keys():
-                if p_id not in objects:
-                    to_remove.add(p_id)
+            debug = False
+            if debug:
+                if len(people) > 0:
+                    print(" / ".join([repr(p) for p in people.values()]))
 
-            for p_id in to_remove:
-                del people[p_id]
+            self.update_lights(people)
 
-            # Add people we don't know about yet and assign them a color
-            for p_id, position in objects.items():
-                if p_id not in people:
-                    # Initial person
-                    people[p_id] = Person(p_id, random_color(), position, 1.0)
-                else:
-                    pass
-                    # TODO
-                    # if disappeared = 0 -> increase intensity (max 1)
-                    # if disappeared > 5 -> decrease intensity (min 0)
-                    # move light toward position (smoothing, we want to run this with higher frequency)
+    def update_people(self, people):
+        # Update states
+        objects = self.tracker.objects.copy()
+        disappeared = self.tracker.disappeared.copy()
 
-            # Update lights
-            if len(people) == 0:
-                colors = np.zeros((self.lights.count, 3))
+        # NOTE: in edge cases, the keys of disappeared will not contain all keys that are in objects
+        # this means the person was removed later, or was only just created.
+        # TODO: Think about how to treat this case, or try to avoid it
+        #print(objects, disappeared)
+
+        # Remove people that disappeared from tracker
+        to_remove = set()
+        for p_id in people.keys():
+            if p_id not in objects:
+                to_remove.add(p_id)
+
+        for p_id in to_remove:
+            del people[p_id]
+
+        # Add people we don't know about yet and assign them a color
+        for p_id, position in objects.items():
+            if p_id not in people:
+                # Initial person
+                people[p_id] = Person(p_id, random_color(), position, 1.0, disappeared)
             else:
-                # TODO: fade people colors i they haven't been seen in a while (use tracker.disappeared values)
-                people_colors = np.array([p.color for p in people.values()])
-                intensity = np.array([ gauss_curve(objects[p_id], .03, np.linspace(0, 1, self.lights.count)) for p_id in people.keys() ])
+                people[p_id].position = position
+                people[p_id].disappeared = disappeared.get(p_id, 50)
+                pass
+                # TODO: update intensity if they haven't been seen in a while (use tracker.disappeared values)
+                # if disappeared = 0 -> increase intensity (max 1)
+                # if disappeared > 5 -> decrease intensity (min 0)
+                # move light toward position (smoothing, we want to run this with higher frequency)
 
-                # If we have p people and l leds, then this gives us the color intensity for each led
-                colors = (people_colors[:,:,np.newaxis] * intensity[:,np.newaxis,:]).max(axis=0).T
+    def update_lights(self, people):
+        # Update lights
+        if len(people) == 0:
+            colors = np.zeros((self.lights.count, 3))
+        else:
+            people_colors = np.array([p.color for p in people.values()])
+            intensity = np.array([ gauss_curve(person.position, .03, np.linspace(0, 1, self.lights.count)) for person in people.values() ])
 
-                #print((intensity*100).astype(np.int32))
+            # If we have p people and l leds, then this gives us the color intensity for each led
+            colors = (people_colors[:,:,np.newaxis] * intensity[:,np.newaxis,:]).max(axis=0).T
 
-            #print(colors[0])
-            self.lights.set_array(colors.astype(np.uint8))
-
-            i+=1
-            time.sleep(0.01)
+        self.lights.set_array(colors.astype(np.uint8))
+        time.sleep(0.03)
 
     def update_tracker(self, detection_result):
         nose_xs = [ p[0].x for p in detection_result.pose_landmarks ]
@@ -81,19 +88,19 @@ class Main:
         self.tracker.update(nose_xs)
 
 
-    def update_leds(self):
-        #print(self.tracker.objects.copy())
-        pass
-        # iterate over objects from tracker,
-        # etc
-
-
 class Person:
-    def __init__(self, p_id, color, position, intensity):
+    def __init__(self, p_id, color, position, intensity, disappeared = 0):
         self.p_id = p_id
         self.color = color
         self.position = position
         self.intensity = intensity
+        self.disappeared = disappeared
+
+    def __repr__(self):
+        return f"{self.p_id} c {self.color} p {self.position} i {self.intensity} d {self.disappeared}"
+
+    def __str__(self):
+        return f"Person {self.p_id} color {self.color} position {self.position} disappeared {self.disappeared}"
 
 def gauss_curve(mean, stdev, x):
     return np.exp(-0.5 * ((x- mean) / stdev) ** 2)
@@ -105,4 +112,4 @@ def random_color():
     return np.array([int(v*255) for v in rgb])
 
 if __name__=="__main__":
-    Main().run()
+    Main(num_poses = 1).run()
