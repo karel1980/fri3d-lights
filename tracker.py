@@ -32,7 +32,7 @@ class Tracker:
             for person_id in list(self.disappeared.keys()):
                 self.handle_disappeared(person_id)
 
-            return self.objects
+            return self.objects, self.disappeared
 
         input_centroids = np.array(centroids, dtype=np.float32)
 
@@ -77,4 +77,4 @@ class Tracker:
                 for col in unused_cols:
                     self.register(input_centroids[col])
 
-        return self.objects
+        return self.objects, self.disappeared
