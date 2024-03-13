@@ -4,6 +4,8 @@
 # Run this script, then point a web browser at http:<this-ip-address>:8000
 # Note: needs simplejpeg to be installed (pip3 install simplejpeg).
 
+from dataclasses import dataclass
+
 import mediapipe as mp
 
 BaseOptions = mp.tasks.BaseOptions
@@ -23,6 +25,14 @@ from picamera2 import MappedArray, Picamera2, Preview
 from picamera2.encoders import JpegEncoder, H264Encoder
 
 from picamera2.outputs import FileOutput
+
+@dataclass
+class Rectangle:
+    x: int
+    y: int
+    width: int
+    height: int
+
 
 PAGE = """\
 <html>
@@ -92,16 +102,13 @@ class StreamingServer(socketserver.ThreadingMixIn, server.HTTPServer):
     allow_reuse_address = True
     daemon_threads = True
 
-faces = []
+detections = dict(rectangles = [ Rectangle(10, 10, 200, 150) ])
+
 def draw_visualizations(request):
-    print("REQUEST", request)
     with MappedArray(request, "main") as m:
-        #print("drawing with cv2")
-        for f in faces:
-            (x, y, w, h) = [c * n // d for c, n, d in zip(f, (w0, h0) * 2, (w1, h1) * 2)]
-            cv2.rectangle(m.array, (x, y), (x + w, y + h), (0, 255, 0, 0))
-
-
+        for rectangle in detections["rectangles"]:
+            # TODO: draw blobs on the image (create the overlay in other thread?)
+            cv2.rectangle(m.array, (rectangle.x, rectangle.y), (rectangle.x + rectangle.width, rectangle.y + rectangle.height), (0, 255, 0, 0))
 
 TUNING_FILES = [
     "/usr/share/libcamera/ipa/rpi/vc4/ov5647.json",
@@ -129,7 +136,17 @@ picam2.start_recording(JpegEncoder(), FileOutput(output))
 #picam2.start_recording(H264Encoder(), FileOutput(output))
 
 def handle_detection_result(detection_result, img, foo):
-    print("todo: handle detection result")
+    result = dict()
+    result["detection_result"] = detection_result
+    result["rectangles"] = [
+            Rectangle(10, 10, 200, 150)
+    ]
+
+    # TODO: check if simple object detection is faster
+    # TODO: update tracker based on detection result
+    # TODO: todo: for missing people, use kalman filter to predict location
+
+    detections = result
 
 model_path = './pose_landmarker_lite.task'
 options = PoseLandmarkerOptions(
