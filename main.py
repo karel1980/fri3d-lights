@@ -1,137 +1,178 @@
+#!/usr/bin/python3
 
-from streaming improt Application
+# Mostly copied from https://picamera.readthedocs.io/en/release-1.13/recipes2.html
+# Run this script, then point a web browser at http:<this-ip-address>:8000
+# Note: needs simplejpeg to be installed (pip3 install simplejpeg).
 
-
-from pose import Pose
-from tracker import Tracker
-
+import io
+import logging
+import socketserver
+from http import server
 import threading
+from threading import Condition
+import cv2
 import time
 
-import colorsys
-import numpy as np
+import mediapipe as mp
 
-import cv2
+from picamera2 import MappedArray, Picamera2, Preview
+from picamera2.encoders import JpegEncoder, H264Encoder
 
-class Main:
+from picamera2.outputs import FileOutput
+
+BaseOptions = mp.tasks.BaseOptions
+PoseLandmarker = mp.tasks.vision.PoseLandmarker
+PoseLandmarkerOptions = mp.tasks.vision.PoseLandmarkerOptions
+VisionRunningMode = mp.tasks.vision.RunningMode
+
+
+PAGE = """\
+<html>
+<head>
+<title>picamera2 MJPEG streaming demo</title>
+</head>
+<body>
+<h1>Picamera2 MJPEG Streaming Demo</h1>
+<img src="stream.mjpg" width="640" height="480" />
+</body>
+</html>
+"""
+
+
+class StreamingOutput(io.BufferedIOBase):
     def __init__(self):
-        self.tracker = Tracker()
-        self.people_reporter = PeopleReporter()
-        self.blob_artist = BlobArtist()
-        self.renderer = ImageRenderer()
+        self.frame = None
+        self.condition = Condition()
 
-        application = Application(self.handle_detection, self.render_result)
+    def write(self, buf):
+        with self.condition:
+            self.frame = buf
+            self.condition.notify_all()
+
+
+class StreamingHandler(server.BaseHTTPRequestHandler):
+    def __init__(self, output, *args, **kwargs):
+        self.output = output
+        super().__init__(*args, **kwargs)
+
+    def do_GET(self):
+        if self.path == '/':
+            self.send_response(301)
+            self.send_header('Location', '/index.html')
+            self.end_headers()
+        elif self.path == '/index.html':
+            content = PAGE.encode('utf-8')
+            self.send_response(200)
+            self.send_header('Content-Type', 'text/html')
+            self.send_header('Content-Length', len(content))
+            self.end_headers()
+            self.wfile.write(content)
+        elif self.path == '/stream.mjpg':
+            self.send_response(200)
+            self.send_header('Age', 0)
+            self.send_header('Cache-Control', 'no-cache, private')
+            self.send_header('Pragma', 'no-cache')
+            self.send_header('Content-Type', 'multipart/x-mixed-replace; boundary=FRAME')
+            self.end_headers()
+            try:
+                while True:
+                    with self.output.condition:
+                        self.output.condition.wait()
+                        frame = self.output.frame
+                    self.wfile.write(b'--FRAME\r\n')
+                    self.send_header('Content-Type', 'image/jpeg')
+                    self.send_header('Content-Length', len(frame))
+                    self.end_headers()
+                    self.wfile.write(frame)
+                    self.wfile.write(b'\r\n')
+            except Exception as e:
+                logging.warning(
+                    'Removed streaming client %s: %s',
+                    self.client_address, str(e))
+        else:
+            self.send_error(404)
+            self.end_headers()
+
+
+class StreamingServer(socketserver.ThreadingMixIn, server.HTTPServer):
+    allow_reuse_address = True
+    daemon_threads = True
+
+def draw_faces(request):
+    with MappedArray(request, "main") as m:
+        cv2.rectangle(m.array, (50, 50), (200, 100), (0, 255, 0, 0), thickness = 5)
+
+
+TUNING_FILES = [
+    "/usr/share/libcamera/ipa/rpi/vc4/ov5647.json",
+    "/usr/share/libcamera/ipa/rpi/vc4/ov5647_noir.json",
+    "/usr/share/libcamera/ipa/rpi/pisp/ov5647.json",
+    "/usr/share/libcamera/ipa/rpi/pisp/ov5647_noir.json",
+]
+
+
+def create_camera(output, post_callback):
+    tuning = Picamera2.load_tuning_file(TUNING_FILES[1])
+    picam2 = Picamera2(tuning=tuning)
+
+    picam2.configure(picam2.create_video_configuration(main={"size": (640, 480)}))
+    picam2.post_callback = post_callback
+
+    picam2.start_recording(JpegEncoder(), FileOutput(output))
+
+    return picam2
+
+
+class PoseDetector:
+    def __init__(self, picam2, detection_callback, num_poses = 1):
+        self.picam2 = picam2
+        self.detection_callback = detection_callback
+        self.num_poses = num_poses
+
 
     def start(self):
-        self.application.start()
+        self.running = True
+        detection_thread = threading.Thread(target=self.detect_forever)
+        detection_thread.start()
 
-    def handle_detection(self, detection_result, output_image, timestamp_ms):
-        tracker.update(detection_result)
-        people_reporter.update(tracker.object)
-        self.blobs = blob_artist.update(result)
+    def detect_forever(self):
+        model_path = './pose_landmarker_lite.task'
 
-    def render_result(self, *args):
-        print("rendering result", len(args))
-        self.renderer.render(self.blobs, *args)
+        options = PoseLandmarkerOptions(
+            num_poses=self.num_poses,
+            base_options=BaseOptions(model_asset_path=model_path),
+            running_mode=VisionRunningMode.LIVE_STREAM,
+            result_callback=self.detection_callback)
 
+        with PoseLandmarker.create_from_options(options) as landmarker:
+            while self.running:
+                frame = self.picam2.capture_array("main")
+                mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=frame)
+                landmarker.detect_async(mp_image, int(time.time()*1000))
 
-class PeopleReporter:
-    def __init__(self):
-        self.people = dict()
+    def stop(self):
+        self.running = False
+                
 
-    def update(self, tracker_result):
-        objects, disappeared = tracker_result
+def handle_pose_detection_result(detection_result, img, some):
+    print("handling detection result", detection_result)
 
-        to_remove = set()
-        for p_id in self.people.keys():
-            if p_id not in objects:
-                to_remove.add(p_id)
+def main():
+    output = StreamingOutput()
+    picam2 = create_camera(output, draw_faces)
 
-        for p_id in to_remove:
-            del self.people[p_id]
+    detector = PoseDetector(picam2, handle_pose_detection_result)
+    detector.start()
 
-        for p_id, landmarks in objects.items():
-            if p_id not in self.people:
-                # Initial person
-                self.people[p_id] = Person(p_id, random_color(), landmarks, 1.0, disappeared)
-            else:
-                self.people[p_id].landmarks = landmarks
-                self.people[p_id].disappeared = disappeared.get(p_id, 50)
-
-        return self.people.values()
-
-class BlobArtist:
-    def __init__(self):
-        # A blob is a triple of (color, mean, stdev)
-        # later we could add intensity
-        blobs = []
-
-    def update(self, people):
-        # TODO: smooth changes using SMA, EMA or rate limiting
-        noses = [(p.color, p.landmarks[0].x, 0.03) for p in people]
-
-        #lefts = [(p.color, p.landmarks[15].x, 0.03) for p in people if p.landmarks[15].presence > .3 and p.landmarks[15].visibility > .3]
-        #rights = [(p.color, p.landmarks[16].x, 0.03) for p in people if p.landmarks[16].presence > .3 and p.landmarks[16].visibility > .3]
-        #return noses + lefts + rights
-
-        return noses
+    try:
+        address = ('', 8000)
+        server = StreamingServer(address, lambda *args, **kwargs: StreamingHandler(output, *args, **kwargs))
+        server.serve_forever()
+    finally:
+        detector.stop()
+        picam2.stop_recording()
 
 
-class LedVisualizer:
-    def __init__(self, people_reporter, num_leds):
-        from neopixel import Lights
-        self.lights = Lights()
-
-    def update(self, blobs):
-        colors = np.array([ b[0] for b in blobs ])
-        intensity = np.array([ gauss_curve(blob[1], blob[2], np.linspace(0, 1, self.lights.count)) for blob in blobs ])
-
-        # Create a n x 3 array where n is the number of leds, and 3 are the R,G,B channels
-        led_array = (colors[:,:,np.newaxis] * intensity[:,np.newaxis,:]).max(axis=0).T.astype(np.uint8)
-
-        self.lights.set_array(led_array)
-
-
-class ImshowVisualizer:
-    def __init__(self, width = 800, height = 50):
-        self.width = width
-        self.height = height
-
-    def update(self, blobs):
-        image = np.zeros((self.height,self.width,3),np.uint8)
-
-        for blob in blobs:
-            color = blob[0]
-            intensity = gauss_curve(blob[1], blob[2], np.linspace(0, 1, self.width))
-
-            layer = (color.reshape(3,1) * intensity).astype(np.uint8).T
-            layer = np.repeat(layer[:,np.newaxis,:], self.height, axis=1).transpose(1,0,2)
-            image = np.maximum(image, layer)
-        
-        cv2.imshow('foo', image)
-
-class Person:
-    def __init__(self, p_id, color, landmarks, intensity, disappeared = 0):
-        self.p_id = p_id
-        self.color = color
-        self.landmarks = landmarks
-        self.intensity = intensity
-        self.disappeared = disappeared
-
-    def __repr__(self):
-        return f"{self.p_id} c {self.color} i {self.intensity} d {self.disappeared}"
-
-    def __str__(self):
-        return f"Person {self.p_id} color {self.color} disappeared {self.disappeared}"
-
-
-def gauss_curve(mean, stdev, x):
-    return np.exp(-0.5 * ((x- mean) / stdev) ** 2)
-
-
-def random_color():
-    h = np.random.rand()
-    rgb = colorsys.hsv_to_rgb(h, 1.0, 1.0)
-
-    return np.array([int(v*255) for v in rgb])
+if __name__=="__main__":
+    main()
 

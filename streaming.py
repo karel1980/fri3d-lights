@@ -23,6 +23,18 @@ from picamera2.encoders import JpegEncoder, H264Encoder
 
 from picamera2.outputs import FileOutput
 
+class StreamingOutput(io.BufferedIOBase):
+    def __init__(self):
+        self.frame = None
+        self.condition = Condition()
+
+    def write(self, buf):
+        with self.condition:
+            self.frame = buf
+            self.condition.notify_all()
+
+output = StreamingOutput()
+
 @dataclass
 class Rectangle:
     x: int
@@ -43,16 +55,6 @@ PAGE = """\
 </html>
 """
 
-
-class StreamingOutput(io.BufferedIOBase):
-    def __init__(self):
-        self.frame = None
-        self.condition = Condition()
-
-    def write(self, buf):
-        with self.condition:
-            self.frame = buf
-            self.condition.notify_all()
 
 
 class StreamingHandler(server.BaseHTTPRequestHandler):
@@ -114,15 +116,16 @@ TUNING_FILES = [
     "/usr/share/libcamera/ipa/rpi/pisp/ov5647_noir.json",
 ]
 
+
 class Application:
     def __init__(self, detection_callback, render_callback):
         self.detection_callback = detection_callback
         self.render_callback = render_callback
 
-        self.output = StreamingOutput()
+        output = StreamingOutput()
 
         tuning = Picamera2.load_tuning_file(TUNING_FILES[1])
-        self.picam2 = Picamera2(tuning=tuning)
+        picam2 = self.picam2 = Picamera2(tuning=tuning)
 
         picam2.configure(picam2.create_video_configuration(
             main={"size": (640, 480)},
@@ -133,12 +136,14 @@ class Application:
         self.lores_size = picam2.stream_configuration("lores")["size"]
         self.lores_stride = picam2.stream_configuration("lores")["stride"]
 
-        self.picam2.post_callback = self.render_callback
-        self.picam2.start_recording(JpegEncoder(), FileOutput(self.output))
+        picam2.post_callback = self.render_callback
+        picam2.start_recording(JpegEncoder(), FileOutput(output))
 
     def start(self):
+        self.running = True
+
         # Start detection thread
-        detection_thread = threading.Thread(target=self.detection_callback)
+        detection_thread = threading.Thread(target=self.detect_poses)
         detection_thread.start()
 
         # TODO: start led controlling thread
@@ -155,7 +160,7 @@ class Application:
             result_callback=self.detection_callback)
 
         with PoseLandmarker.create_from_options(options) as landmarker:
-            while True:
+            while self.running:
                 buffer = self.picam2.capture_array("main")
                 mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=buffer)
                 landmarker.detect_async(mp_image, int(time.time()*1000))
@@ -173,5 +178,6 @@ class Application:
             server = StreamingServer(address, StreamingHandler)
             server.serve_forever()
         finally:
+            self.running = False
             self.picam2.stop_recording()
 
