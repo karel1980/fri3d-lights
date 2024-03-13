@@ -10,6 +10,16 @@ import numpy as np
 
 import cv2
 
+def main():
+    tracker = Tracker()
+    people_reporter = PeopleReporter()
+    blob_artist = BlobArtist()
+    #leds = LedVisualizer(50)
+    leds = ImshowVisualizer()
+
+    main = Main(tracker, people_reporter, blob_artist, leds)
+    Pose(num_poses = 2, callback = main.update).run()
+
 class PeopleReporter:
     def __init__(self):
         self.people = dict()
@@ -129,12 +139,4 @@ class Main:
         self.visualizer.update(result)
 
 if __name__=="__main__":
-    tracker = Tracker()
-    people_reporter = PeopleReporter()
-    blob_artist = BlobArtist()
-    #leds = LedVisualizer(50)
-    leds = ImshowVisualizer()
-
-    main = Main(tracker, people_reporter, blob_artist, leds)
-    Pose(num_poses = 2, callback = main.update).run()
-
+    main()

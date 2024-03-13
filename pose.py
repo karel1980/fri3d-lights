@@ -26,7 +26,7 @@ class Pose:
         self.callback = callback
         self.img = None
         self.num_poses = num_poses
-        self.cap = cv2.VideoCapture(0)
+        self.cap = cv2.VideoCapture(1)
         #self.cap = cv2.VideoCapture("twopeople.mp4")
 
         self.last_detection = None
@@ -50,6 +50,9 @@ class Pose:
                 if not ret:
                     print("no image from camera")
                     break
+                
+                print(frame.shape)
+                print(frame.dtype)
 
                 mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=frame)
                 landmarker.detect_async(mp_image, int(time.time()*1000))
