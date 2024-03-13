@@ -98,18 +98,12 @@ class StreamingServer(socketserver.ThreadingMixIn, server.HTTPServer):
     allow_reuse_address = True
     daemon_threads = True
 
-def draw_faces(request):
-    with MappedArray(request, "main") as m:
-        cv2.rectangle(m.array, (50, 50), (200, 100), (0, 255, 0, 0), thickness = 5)
-
-
 TUNING_FILES = [
     "/usr/share/libcamera/ipa/rpi/vc4/ov5647.json",
     "/usr/share/libcamera/ipa/rpi/vc4/ov5647_noir.json",
     "/usr/share/libcamera/ipa/rpi/pisp/ov5647.json",
     "/usr/share/libcamera/ipa/rpi/pisp/ov5647_noir.json",
 ]
-
 
 def create_camera(output, post_callback):
     tuning = Picamera2.load_tuning_file(TUNING_FILES[1])
@@ -154,23 +148,45 @@ class PoseDetector:
         self.running = False
                 
 
-def handle_pose_detection_result(detection_result, img, some):
-    print("handling detection result", detection_result)
+class Main:
+    blobs = []
+
+    def __init__(self):
+        output = StreamingOutput()
+        picam2 = create_camera(output, self.draw_faces)
+
+        self.detector = PoseDetector(picam2, self.handle_pose_detection_result)
+
+        address = ('', 8000)
+        self.server = StreamingServer(address, lambda *args, **kwargs: StreamingHandler(output, *args, **kwargs))
+
+        self.blobs = []
+
+    def start(self):
+        self.start_detector()
+        self.start_webserver()
+
+    def start_detector(self):
+        self.detector.start()
+
+    def start_webserver(self):
+        try:
+            self.server.serve_forever()
+        finally:
+            self.detector.stop()
+            picam2.stop_recording()
+
+    def handle_pose_detection_result(self, detection_result, image, foo):
+        self.blobs = [ (10, 10, 100, 100) ]
+
+    def draw_faces(self, request):
+        with MappedArray(request, "main") as m:
+            cv2.rectangle(m.array, (50, 50), (200, 100), (0, 255, 0, 0), thickness = 5)
+            for blob in self.blobs:
+                cv2.rectangle(m.array, (blob[0], blob[1]), (blob[2], blob[3]), (0, 255, 0, 0), thickness = 5)
 
 def main():
-    output = StreamingOutput()
-    picam2 = create_camera(output, draw_faces)
-
-    detector = PoseDetector(picam2, handle_pose_detection_result)
-    detector.start()
-
-    try:
-        address = ('', 8000)
-        server = StreamingServer(address, lambda *args, **kwargs: StreamingHandler(output, *args, **kwargs))
-        server.serve_forever()
-    finally:
-        detector.stop()
-        picam2.stop_recording()
+    Main().start()
 
 
 if __name__=="__main__":
