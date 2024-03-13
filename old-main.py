@@ -1,7 +1,4 @@
 
-from streaming improt Application
-
-
 from pose import Pose
 from tracker import Tracker
 
@@ -13,27 +10,15 @@ import numpy as np
 
 import cv2
 
-class Main:
-    def __init__(self):
-        self.tracker = Tracker()
-        self.people_reporter = PeopleReporter()
-        self.blob_artist = BlobArtist()
-        self.renderer = ImageRenderer()
+def main():
+    tracker = Tracker()
+    people_reporter = PeopleReporter()
+    blob_artist = BlobArtist()
+    #leds = LedVisualizer(50)
+    leds = ImshowVisualizer()
 
-        application = Application(self.handle_detection, self.render_result)
-
-    def start(self):
-        self.application.start()
-
-    def handle_detection(self, detection_result, output_image, timestamp_ms):
-        tracker.update(detection_result)
-        people_reporter.update(tracker.object)
-        self.blobs = blob_artist.update(result)
-
-    def render_result(self, *args):
-        print("rendering result", len(args))
-        self.renderer.render(self.blobs, *args)
-
+    main = Main(tracker, people_reporter, blob_artist, leds)
+    Pose(num_poses = 2, callback = main.update).run()
 
 class PeopleReporter:
     def __init__(self):
@@ -135,3 +120,23 @@ def random_color():
 
     return np.array([int(v*255) for v in rgb])
 
+
+class Main:
+    def __init__(self, tracker, people_reporter, blob_artist, visualizer):
+        self.tracker = tracker
+        self.people_reporter = people_reporter
+        self.blob_artist = blob_artist
+        self.visualizer = visualizer
+
+    def update(self, detection_result, output_image, timestamp_ms):
+        result = tracker.update(detection_result)
+        #print("tracker:", result)
+        result = self.people_reporter.update(result)
+        #print("people:", result)
+        result = self.blob_artist.update(result)
+        #print("blobs:", result)
+
+        self.visualizer.update(result)
+
+if __name__=="__main__":
+    main()
