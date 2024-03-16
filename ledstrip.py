@@ -2,7 +2,7 @@ import time
 from rpi_ws281x import PixelStrip, Color
 
 
-class Lights:
+class LedStrip:
     def __init__(self, count=50, brightness = 55):
         self.count = count
 

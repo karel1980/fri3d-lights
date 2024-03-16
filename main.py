@@ -1,30 +1,240 @@
-#!/usr/bin/python3
-
-# Mostly copied from https://picamera.readthedocs.io/en/release-1.13/recipes2.html
-# Run this script, then point a web browser at http:<this-ip-address>:8000
-# Note: needs simplejpeg to be installed (pip3 install simplejpeg).
-
+import cv2
 import io
-import logging
 import socketserver
 from http import server
 import threading
-from threading import Condition
-import cv2
+
+#from ledstrip import LedStrip
+
+from tracker import Tracker
+
 import time
-
 import mediapipe as mp
-
-from picamera2 import MappedArray, Picamera2, Preview
-from picamera2.encoders import JpegEncoder, H264Encoder
-
-from picamera2.outputs import FileOutput
-
 BaseOptions = mp.tasks.BaseOptions
 PoseLandmarker = mp.tasks.vision.PoseLandmarker
 PoseLandmarkerOptions = mp.tasks.vision.PoseLandmarkerOptions
 VisionRunningMode = mp.tasks.vision.RunningMode
 
+class Plugin:
+    def __init__(self):
+        self.name = "null"
+
+    def stop(self):
+        pass
+
+    def process(self, frame, context):
+        # In this method you can analyze the frame, but don't manipulate the frame here
+        pass
+
+    def postprocess(self, frame, context):
+        # Here is where you manipulate the frame
+        return frame
+
+class Person:
+    def __init__(self, p_id, landmarks):
+        self.p_id = p_id
+        self.landmarks = landmarks
+        self.color = (255,255,0)
+        self.missing = 0
+
+    def __repr__(self):
+        return f"Person {self.p_id} at {self.landmarks[0].x} ({self.missing})"
+
+    def __str__(self):
+        return f"Person {self.p_id} at {self.landmarks[0].x} ({self.missing})"
+
+class PoseDetectorPlugin:
+    def __init__(self):
+        self.name = "posedetector"
+        self.num_poses = 1
+
+        model_path = 'pose_landmarker_lite.task'
+        options = PoseLandmarkerOptions(
+            num_poses=self.num_poses,
+            base_options=BaseOptions(model_asset_path=model_path),
+            running_mode=VisionRunningMode.LIVE_STREAM,
+            result_callback=self.detection_callback)
+
+        self.landmarker = PoseLandmarker.create_from_options(options)
+
+        self.people = {}
+        self.tracker = Tracker()
+
+    def stop(self):
+        pass
+
+    def process(self, frame, context):
+        context["people"] = self.people
+
+        mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=frame)
+        self.landmarker.detect_async(mp_image, int(time.time()*1000))
+
+    def detection_callback(self, detection_result, frame, foo):
+        last_track_result = self.tracker.update(detection_result)
+        tracked, disappeared = last_track_result
+
+        removable = set(self.people.keys()) - set(tracked.keys())
+        for k in removable:
+            del self.people[k]
+
+        for k,v in tracked.items():
+            if k not in self.people:
+                self.people[k] = Person(k, v)
+            else:
+                self.people[k].landmarks = v
+
+        for k,v in disappeared.items():
+            if k in self.people:
+                self.people[k].missing = v
+
+
+    def postprocess(self, frame, context):
+        return frame
+
+class LedOutputPlugin:
+    def __init__(self):
+        self.name = "ledoutput"
+        self.num_leds = 60
+        self.strip = LedStrip(self.num_leds)
+
+    def stop(self):
+        pass
+
+    def process(self, frame, context):
+        if "people" in context:
+            led_values = np.zeros(self.num_leds, 3)
+            for person in people:
+                color = person.color
+                mu = (person.landmarks[0].x + person.landmarks[15].x + person.landmarks[16].x) / 3
+                sigma = 0.15
+
+                np.linspace(0, 1, self.num_leds)
+                person_led_values = "..."
+                led_values = np.max(led_values, person_led_values)
+        pass
+
+
+class StreamingOuput:
+    def __init__(self):
+        self.condition = threading.Condition()
+        self.frame = frame
+
+
+class CV2Camera:
+    def __init__(self):
+        self.cap = cv2.VideoCapture(0)
+
+    def get_frame(self):
+        ret, frame = self.cap.read()
+
+        cv2.waitKey(1) # TODO: strigger stop if 'q' is pressed?
+        return frame
+
+    def release(self):
+        self.cap.release()
+
+
+class Application:
+    def __init__(self, camera):
+        self.camera = camera
+        self.plugins = []
+
+        address = ('', 8000)
+        self.output = StreamingOutput()
+        self.server = StreamingServer(address, lambda *args, **kwargs: StreamingHandler(self.output, *args, **kwargs))
+
+    def register_plugin(self, plugin):
+        self.plugins.append(plugin)
+
+    def start(self):
+        self.running = True
+        self.start_camera_thread()
+        try:
+            self.server.serve_forever()
+        finally:
+            self.running = False
+            self.camera.release()
+            pass
+
+    def start_camera_thread(self):
+        thread = threading.Thread(target = self.camera_loop)
+        thread.start()
+
+    def camera_loop(self):
+        while self.running:
+            frame = self.camera.get_frame()
+            if frame is None:
+                print("No frame. Stopping")
+                #break
+            context = dict()
+            for plugin in self.plugins:
+                plugin.process(frame, context)
+
+            for plugin in self.plugins:
+                plugin.postprocess(frame, context)
+
+            self.output.write(frame)
+
+
+class StickFigurePlugin:
+    def __init__(self):
+        pass
+
+    def stop(self):
+        pass
+
+    def process(self, frame, context):
+        pass
+    
+    def postprocess(self, frame, context):
+        h,w = frame.shape[0], frame.shape[1]
+        for person in context["people"].values():
+            nose = person.landmarks[0]
+            cv2.circle(frame, (int(nose.x *w ), int(nose.y *h)), 5, (255,255,255), 5)
+
+class StdoutPlugin:
+    def __init__(self):
+        pass
+
+    def process(self, frame, context):
+        print(frame.shape)
+        print(context)
+
+    def postprocess(self, frame, context):
+        pass
+
+class LedMonitorPlugin:
+    def __init__(self):
+        pass
+
+    def stop(self):
+        pass
+
+    def process(self, frame, context):
+        pass
+    
+    def postprocess(self, frame, context):
+        # TODO: draw on the frame - the led colors should be in context
+        pass
+    
+
+def main():
+    camera = CV2Camera()
+    app = Application(CV2Camera())
+
+    # TODO: use some connector paradigm to connect them logically?
+    # camera -> posedetector (every frame)
+    # posedetector -> stdout    (on detection callback)
+    # posedetector -> ledoutput (on detection callback)
+    # posedetector -> stickfigure 
+
+    app.register_plugin(PoseDetectorPlugin())
+    app.register_plugin(StdoutPlugin())
+    #app.register_plugin(LedOutputPlugin())
+    #app.register_plugin(LedMonitorPlugin())
+    app.register_plugin(StickFigurePlugin())
+
+    app.start()
 
 PAGE = """\
 <html>
@@ -42,7 +252,7 @@ PAGE = """\
 class StreamingOutput(io.BufferedIOBase):
     def __init__(self):
         self.frame = None
-        self.condition = Condition()
+        self.condition = threading.Condition()
 
     def write(self, buf):
         with self.condition:
@@ -78,12 +288,12 @@ class StreamingHandler(server.BaseHTTPRequestHandler):
                 while True:
                     with self.output.condition:
                         self.output.condition.wait()
-                        frame = self.output.frame
+                        ret, buf = cv2.imencode('.jpg', self.output.frame)
                     self.wfile.write(b'--FRAME\r\n')
                     self.send_header('Content-Type', 'image/jpeg')
-                    self.send_header('Content-Length', len(frame))
+                    self.send_header('Content-Length', len(buf))
                     self.end_headers()
-                    self.wfile.write(frame)
+                    self.wfile.write(buf.tobytes())
                     self.wfile.write(b'\r\n')
             except Exception as e:
                 logging.warning(
@@ -98,97 +308,6 @@ class StreamingServer(socketserver.ThreadingMixIn, server.HTTPServer):
     allow_reuse_address = True
     daemon_threads = True
 
-TUNING_FILES = [
-    "/usr/share/libcamera/ipa/rpi/vc4/ov5647.json",
-    "/usr/share/libcamera/ipa/rpi/vc4/ov5647_noir.json",
-    "/usr/share/libcamera/ipa/rpi/pisp/ov5647.json",
-    "/usr/share/libcamera/ipa/rpi/pisp/ov5647_noir.json",
-]
 
-def create_camera(output, post_callback):
-    tuning = Picamera2.load_tuning_file(TUNING_FILES[1])
-    picam2 = Picamera2(tuning=tuning)
-
-    picam2.configure(picam2.create_video_configuration(main={"size": (640, 480)}))
-    picam2.post_callback = post_callback
-
-    picam2.start_recording(JpegEncoder(), FileOutput(output))
-
-    return picam2
-
-
-class PoseDetector:
-    def __init__(self, picam2, detection_callback, num_poses = 1):
-        self.picam2 = picam2
-        self.detection_callback = detection_callback
-        self.num_poses = num_poses
-
-
-    def start(self):
-        self.running = True
-        detection_thread = threading.Thread(target=self.detect_forever)
-        detection_thread.start()
-
-    def detect_forever(self):
-        model_path = './pose_landmarker_lite.task'
-
-        options = PoseLandmarkerOptions(
-            num_poses=self.num_poses,
-            base_options=BaseOptions(model_asset_path=model_path),
-            running_mode=VisionRunningMode.LIVE_STREAM,
-            result_callback=self.detection_callback)
-
-        with PoseLandmarker.create_from_options(options) as landmarker:
-            while self.running:
-                frame = self.picam2.capture_array("main")
-                mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=frame)
-                landmarker.detect_async(mp_image, int(time.time()*1000))
-
-    def stop(self):
-        self.running = False
-                
-
-class Main:
-    blobs = []
-
-    def __init__(self):
-        output = StreamingOutput()
-        picam2 = create_camera(output, self.draw_faces)
-
-        self.detector = PoseDetector(picam2, self.handle_pose_detection_result)
-
-        address = ('', 8000)
-        self.server = StreamingServer(address, lambda *args, **kwargs: StreamingHandler(output, *args, **kwargs))
-
-        self.blobs = []
-
-    def start(self):
-        self.start_detector()
-        self.start_webserver()
-
-    def start_detector(self):
-        self.detector.start()
-
-    def start_webserver(self):
-        try:
-            self.server.serve_forever()
-        finally:
-            self.detector.stop()
-            picam2.stop_recording()
-
-    def handle_pose_detection_result(self, detection_result, image, foo):
-        self.blobs = [ (10, 10, 100, 100) ]
-
-    def draw_faces(self, request):
-        with MappedArray(request, "main") as m:
-            cv2.rectangle(m.array, (50, 50), (200, 100), (0, 255, 0, 0), thickness = 5)
-            for blob in self.blobs:
-                cv2.rectangle(m.array, (blob[0], blob[1]), (blob[2], blob[3]), (0, 255, 0, 0), thickness = 5)
-
-def main():
-    Main().start()
-
-
-if __name__=="__main__":
+if __name__ == "__main__":
     main()
-

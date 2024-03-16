@@ -43,6 +43,8 @@ class Tracker:
             person_ids = list(self.objects.keys())
             person_landmarks = list(self.objects.values())
 
+            #TODO: do distance calculation based on more than just nose x coordinates
+
             D = np.zeros((len(person_landmarks), len(landmarks)), dtype=int)
             # Calculates the distance from each person to each detection result
             for i in range(len(person_landmarks)):
