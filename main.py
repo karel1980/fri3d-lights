@@ -12,6 +12,9 @@ from tracker import Tracker
 
 import time
 import mediapipe as mp
+from mediapipe import solutions
+from mediapipe.framework.formats import landmark_pb2
+
 
 BaseOptions = mp.tasks.BaseOptions
 VisionRunningMode = mp.tasks.vision.RunningMode
@@ -330,15 +333,26 @@ class StickFigurePlugin:
         pass
     
     def postprocess(self, frame, context):
-        h,w = frame.shape[0], frame.shape[1]
-        for person in context["people"]:
-            nose = person.landmarks[0]
-            wrist_l = person.landmarks[15]
-            wrist_r = person.landmarks[16]
-            points = [nose, wrist_l, wrist_r]
+        if "people" not in context:
+            return
+        pose_landmarks_list = [ p.landmarks for p in context["people"] ]
+        annotated_image = frame
 
-            for point in points:
-                cv2.circle(frame, (int(point.x *w ), int(point.y *h)), 5, (255,255,255), 5)
+        # Loop through the detected poses to visualize.
+        for idx in range(len(pose_landmarks_list)):
+          pose_landmarks = pose_landmarks_list[idx]
+
+          # Draw the pose landmarks.
+          pose_landmarks_proto = landmark_pb2.NormalizedLandmarkList()
+          pose_landmarks_proto.landmark.extend([
+            landmark_pb2.NormalizedLandmark(x=landmark.x, y=landmark.y, z=landmark.z) for landmark in pose_landmarks
+          ])
+          solutions.drawing_utils.draw_landmarks(
+            annotated_image,
+            pose_landmarks_proto,
+            solutions.pose.POSE_CONNECTIONS,
+            solutions.drawing_styles.get_default_pose_landmarks_style())
+        return annotated_image
 
 class DrawBoundingBoxPlugin:
     def __init__(self):
@@ -501,7 +515,7 @@ def main():
     app.register_plugin(PoseDetectorPlugin())
     app.register_plugin(ObjectDetectorPlugin())
     app.register_plugin(BlobCalculatorPlugin())
-    app.register_plugin(StdoutPlugin())
+    #app.register_plugin(StdoutPlugin())
     try:
         app.register_plugin(LedOutputPlugin(LedStrip(60)))
     except NameError:
