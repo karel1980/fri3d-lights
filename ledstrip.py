@@ -1,10 +1,13 @@
 import time
-from rpi_ws281x import PixelStrip, Color
+
+import os
+if os.geteuid() == 0:
+    from rpi_ws281x import PixelStrip, Color
 
 
 class LedStrip:
-    def __init__(self, count=50, brightness = 55):
-        self.count = count
+    def __init__(self, num_leds=50, brightness = 200):
+        self.num_leds = num_leds
 
         LED_PIN = 18          # GPIO pin connected to the pixels (18 uses PWM!).
         LED_FREQ_HZ = 800000  # LED signal frequency in hertz (usually 800khz)
@@ -12,7 +15,7 @@ class LedStrip:
         LED_INVERT = False    # True to invert the signal (when using NPN transistor level shift)
 
         # Create NeoPixel object with the specified configuration
-        self.strip = PixelStrip(count, LED_PIN, LED_FREQ_HZ, LED_DMA, LED_INVERT, brightness)
+        self.strip = PixelStrip(num_leds, LED_PIN, LED_FREQ_HZ, LED_DMA, LED_INVERT, brightness)
 
         # Intialize the library (must be called once before other functions).
         self.strip.begin()
@@ -26,7 +29,7 @@ class LedStrip:
     def set_array(self, colors):
         if len(colors) != self.strip.numPixels():
             print("Warning: set_array called with wrong number of colors")
-        for i in range(max(len(colors),self.count)):
+        for i in range(max(len(colors),self.num_leds)):
             self.strip.setPixelColor(i, Color(*colors[i]))
         self.strip.show()
 

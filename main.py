@@ -3,9 +3,11 @@ import io
 import socketserver
 from http import server
 import threading
+import numpy as np
+import random
 
-#from ledstrip import LedStrip
-
+import colorsys
+from ledstrip import LedStrip
 from tracker import Tracker
 
 import time
@@ -31,11 +33,11 @@ class Plugin:
         return frame
 
 class Person:
-    def __init__(self, p_id, landmarks):
+    def __init__(self, p_id, landmarks, color=None, missing=0):
         self.p_id = p_id
         self.landmarks = landmarks
-        self.color = (255,255,0)
-        self.missing = 0
+        self.color = random_color() if color is None else color
+        self.missing = missing
 
     def __repr__(self):
         return f"Person {self.p_id} at {self.landmarks[0].x} ({self.missing})"
@@ -43,10 +45,15 @@ class Person:
     def __str__(self):
         return f"Person {self.p_id} at {self.landmarks[0].x} ({self.missing})"
 
+
+def random_color():
+    hsv_color = (random.random(), 1.0, 1.0)
+    return [ int(x*256) for x in colorsys.hsv_to_rgb(*hsv_color) ]
+
 class PoseDetectorPlugin:
     def __init__(self):
         self.name = "posedetector"
-        self.num_poses = 1
+        self.num_poses = 3
 
         model_path = 'pose_landmarker_lite.task'
         options = PoseLandmarkerOptions(
@@ -91,26 +98,50 @@ class PoseDetectorPlugin:
     def postprocess(self, frame, context):
         return frame
 
+class BlobCalculatorPlugin:
+    def process(self, frame, context):
+        if "people" not in context:
+            return
+
+        blobs = []
+        for person in context["people"].values():
+            blobs.append((person.landmarks[0].x, 0.1, person.color))
+        
+        context["blobs"] = blobs
+
+    def postprocess(self, frame, context):
+        pass
+
+
 class LedOutputPlugin:
-    def __init__(self):
+    def __init__(self, ledstrip):
         self.name = "ledoutput"
-        self.num_leds = 60
-        self.strip = LedStrip(self.num_leds)
+        self.ledstrip = LedStrip(60) if ledstrip is None else ledstrip
+        self.num_leds = ledstrip.num_leds
 
     def stop(self):
         pass
 
     def process(self, frame, context):
         if "people" in context:
-            led_values = np.zeros(self.num_leds, 3)
-            for person in people:
-                color = person.color
-                mu = (person.landmarks[0].x + person.landmarks[15].x + person.landmarks[16].x) / 3
-                sigma = 0.15
+            led_values = self.calculate_led_colors(context["people"])
+            self.ledstrip.set_array(led_values)
+        pass
 
-                np.linspace(0, 1, self.num_leds)
-                person_led_values = "..."
-                led_values = np.max(led_values, person_led_values)
+    def calculate_led_colors(self, people):
+        led_values = np.zeros((self.num_leds, 3), np.uint8)
+        for person in people.values():
+            color = person.color
+            mu = (person.landmarks[0].x + person.landmarks[15].x + person.landmarks[16].x) / 3
+            sigma = 0.02
+
+            intensity = bell_curve(np.linspace(1.0, 0.0, self.num_leds), mu, sigma)
+            colors = (intensity[:,np.newaxis] * np.array(color)).astype(np.uint8)
+            led_values = np.maximum(led_values, colors)
+
+        return led_values
+
+    def postprocess(self, frame,context):
         pass
 
 
@@ -120,9 +151,34 @@ class StreamingOuput:
         self.frame = frame
 
 
+class PiCamera:
+    def __init__(self):
+        import picamera2
+        TUNING_FILES = [
+            "/usr/share/libcamera/ipa/rpi/vc4/ov5647.json",
+            "/usr/share/libcamera/ipa/rpi/vc4/ov5647_noir.json",
+            "/usr/share/libcamera/ipa/rpi/pisp/ov5647.json",
+            "/usr/share/libcamera/ipa/rpi/pisp/ov5647_noir.json",
+        ]
+        
+        tuning = picamera2.Picamera2.load_tuning_file(TUNING_FILES[1])
+        picam2 = picamera2.Picamera2(tuning=tuning)
+        config = picam2.create_video_configuration(main={"size": (640, 480), "format": "RGB888"})
+        picam2.configure(config)
+        picam2.start()
+      
+        self.camera = picam2
+
+    def get_frame(self):
+        return self.camera.capture_array()
+
+    def release(self):
+        self.camera.stop_recording()
+
+
 class CV2Camera:
     def __init__(self):
-        self.cap = cv2.VideoCapture(0)
+        self.cap = cv2.VideoCapture()
 
     def get_frame(self):
         ret, frame = self.cap.read()
@@ -137,10 +193,10 @@ class CV2Camera:
 class Application:
     def __init__(self, camera):
         self.camera = camera
+        self.output = StreamingOutput()
         self.plugins = []
 
         address = ('', 8000)
-        self.output = StreamingOutput()
         self.server = StreamingServer(address, lambda *args, **kwargs: StreamingHandler(self.output, *args, **kwargs))
 
     def register_plugin(self, plugin):
@@ -164,8 +220,9 @@ class Application:
         while self.running:
             frame = self.camera.get_frame()
             if frame is None:
-                print("No frame. Stopping")
-                #break
+                print("No frame.")
+                time.sleep(1)
+                continue
             context = dict()
             for plugin in self.plugins:
                 plugin.process(frame, context)
@@ -197,7 +254,7 @@ class StdoutPlugin:
         pass
 
     def process(self, frame, context):
-        print(frame.shape)
+        #print(frame.shape)
         print(context)
 
     def postprocess(self, frame, context):
@@ -214,24 +271,41 @@ class LedMonitorPlugin:
         pass
     
     def postprocess(self, frame, context):
-        # TODO: draw on the frame - the led colors should be in context
-        pass
-    
+        if "blobs" not in context:
+            return
+
+        h,w,c = frame.shape
+
+        monitor_line = np.zeros((w, c), np.uint8)
+        for mu,sigma,color in context["blobs"]:
+            color = color if c == 3 else [*color, 255]
+            intensity = (50 * scaled_bell_curve(np.linspace(0.0, 1.0, w), mu, sigma)).astype(np.uint8)
+            channels = np.array(color).astype(np.uint8)
+            layer = intensity[:, np.newaxis].astype(np.uint8) * channels
+            monitor_line = np.maximum(monitor_line, layer)
+
+        monitor_height = 10
+        monitor = np.tile(monitor_line[np.newaxis, :, :], (monitor_height, 1, 1))
+        frame[-monitor_height:, :, :] = monitor
+            
+
+def bell_curve(x, mean, std_dev):
+    return np.exp(-((x - mean) ** 2) / (2 * std_dev ** 2))
+
+def scaled_bell_curve(x, mean, std_dev):
+    return bell_curve(x, mean, std_dev) / (std_dev * np.sqrt(2 * np.pi))
+
 
 def main():
-    camera = CV2Camera()
-    app = Application(CV2Camera())
-
-    # TODO: use some connector paradigm to connect them logically?
-    # camera -> posedetector (every frame)
-    # posedetector -> stdout    (on detection callback)
-    # posedetector -> ledoutput (on detection callback)
-    # posedetector -> stickfigure 
+    #camera = CV2Camera()
+    camera = PiCamera()
+    app = Application(camera)
 
     app.register_plugin(PoseDetectorPlugin())
-    app.register_plugin(StdoutPlugin())
-    #app.register_plugin(LedOutputPlugin())
-    #app.register_plugin(LedMonitorPlugin())
+    app.register_plugin(BlobCalculatorPlugin())
+    #app.register_plugin(StdoutPlugin())
+    app.register_plugin(LedOutputPlugin(LedStrip(60)))
+    app.register_plugin(LedMonitorPlugin())
     app.register_plugin(StickFigurePlugin())
 
     app.start()
@@ -239,10 +313,10 @@ def main():
 PAGE = """\
 <html>
 <head>
-<title>picamera2 MJPEG streaming demo</title>
+<title>Camera monitor</title>
 </head>
 <body>
-<h1>Picamera2 MJPEG Streaming Demo</h1>
+<h1>Camera monitor</h1>
 <img src="stream.mjpg" width="640" height="480" />
 </body>
 </html>
@@ -288,7 +362,7 @@ class StreamingHandler(server.BaseHTTPRequestHandler):
                 while True:
                     with self.output.condition:
                         self.output.condition.wait()
-                        ret, buf = cv2.imencode('.jpg', self.output.frame)
+                        ret, buf = cv2.imencode('.jpg', cv2.cvtColor(self.output.frame , cv2.COLOR_BGR2RGB))
                     self.wfile.write(b'--FRAME\r\n')
                     self.send_header('Content-Type', 'image/jpeg')
                     self.send_header('Content-Length', len(buf))
@@ -310,4 +384,5 @@ class StreamingServer(socketserver.ThreadingMixIn, server.HTTPServer):
 
 
 if __name__ == "__main__":
+
     main()
