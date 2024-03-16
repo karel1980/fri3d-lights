@@ -12,10 +12,15 @@ from tracker import Tracker
 
 import time
 import mediapipe as mp
+
 BaseOptions = mp.tasks.BaseOptions
+VisionRunningMode = mp.tasks.vision.RunningMode
+
 PoseLandmarker = mp.tasks.vision.PoseLandmarker
 PoseLandmarkerOptions = mp.tasks.vision.PoseLandmarkerOptions
-VisionRunningMode = mp.tasks.vision.RunningMode
+
+ObjectDetector = mp.tasks.vision.ObjectDetector
+ObjectDetectorOptions = mp.tasks.vision.ObjectDetectorOptions
 
 class Plugin:
     def __init__(self):
@@ -76,7 +81,7 @@ class PoseDetectorPlugin:
         pass
 
     def process(self, frame, context):
-        context["people"] = self.people
+        context["people"] = [p for p in self.people.values()]
 
         mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=frame)
         self.landmarker.detect_async(mp_image, int(time.time()*1000))
@@ -103,13 +108,66 @@ class PoseDetectorPlugin:
     def postprocess(self, frame, context):
         return frame
 
+class ObjectDetectorPlugin:
+    def __init__(self):
+        self.name = "objectdetector"
+        self.num_poses = 1
+
+        model_path = 'efficientdet_lite0.tflite'
+
+        options = ObjectDetectorOptions(
+            base_options=BaseOptions(model_asset_path=model_path),
+            running_mode=VisionRunningMode.LIVE_STREAM,
+            max_results=5,
+            result_callback=self.detection_callback)
+
+        self.detector = ObjectDetector.create_from_options(options)
+
+        self.objects = {}
+        #self.tracker = Tracker(self.distance_metric)
+
+    def distance_metric(self, a, b):
+        return np.linalg.norm(a[0].x - b[0].x)
+
+    def stop(self):
+        pass
+
+    def process(self, frame, context):
+        context["objects"] = self.objects
+
+        mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=frame)
+        self.detector.detect_async(mp_image, int(time.time()*1000))
+
+    def detection_callback(self, detection_result, frame, foo):
+        self.objects = detection_result
+#        last_track_result = self.tracker.update(detection_result.pose_landmarks)
+#        tracked, disappeared = last_track_result
+#
+#        removable = set(self.people.keys()) - set(tracked.keys())
+#        for k in removable:
+#            del self.people[k]
+#
+#        for k,v in tracked.items():
+#            if k not in self.people:
+#                self.people[k] = Person(k, v)
+#            else:
+#                self.people[k].landmarks = v
+#
+#        for k,v in disappeared.items():
+#            if k in self.people:
+#                self.people[k].missing = v
+
+
+    def postprocess(self, frame, context):
+        return frame
+
 class BlobCalculatorPlugin:
     def process(self, frame, context):
         if "people" not in context:
             return
 
         blobs = []
-        for person in context["people"].values():
+        for person in context["people"]:
             blobs.append((person.landmarks[0].x, 0.1, person.color))
         
         context["blobs"] = blobs
@@ -135,7 +193,7 @@ class LedOutputPlugin:
 
     def calculate_led_colors(self, people):
         led_values = np.zeros((self.num_leds, 3), np.uint8)
-        for person in people.values():
+        for person in people:
             color = person.color
             mu = (person.landmarks[0].x + person.landmarks[15].x + person.landmarks[16].x) / 3
             sigma = 0.02
@@ -271,7 +329,7 @@ class StickFigurePlugin:
     
     def postprocess(self, frame, context):
         h,w = frame.shape[0], frame.shape[1]
-        for person in context["people"].values():
+        for person in context["people"]:
             nose = person.landmarks[0]
             wrist_l = person.landmarks[15]
             wrist_r = person.landmarks[16]
@@ -401,19 +459,21 @@ class StreamingServer(socketserver.ThreadingMixIn, server.HTTPServer):
 
 
 def main():
-    #camera = PiCamera()
+    camera = PiCamera()
     #camera = CV2Camera()
     #camera = CV2VideoSource('experiments/output.avi')
-    camera = CV2VideoSource('experiments/lights-on.h264')
+    #camera = CV2VideoSource('experiments/lights-on.h264')
+
     app = Application(camera)
 
     app.register_plugin(PoseDetectorPlugin())
+    app.register_plugin(ObjectDetectorPlugin())
     app.register_plugin(BlobCalculatorPlugin())
-    #app.register_plugin(StdoutPlugin())
-    #try:
-    #    app.register_plugin(LedOutputPlugin(LedStrip(60)))
-    #except NameError:
-    #    print("OOPS NO LED STRIP. Try running as root")
+    app.register_plugin(StdoutPlugin())
+    try:
+        app.register_plugin(LedOutputPlugin(LedStrip(60)))
+    except NameError:
+        print("OOPS NO LED STRIP. Try running as root")
     app.register_plugin(LedMonitorPlugin())
     app.register_plugin(StickFigurePlugin())
 

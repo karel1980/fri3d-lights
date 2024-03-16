@@ -24,7 +24,7 @@ class LandMark:
     y: int
     z: int
 
-class LedOutputPLuginTest(unittest.TestCase):
+class LedOutputPluginTest(unittest.TestCase):
 
     def test_bell_curve(self):
         self.assertEqual(bell_curve(0,0,1), 1)
@@ -34,7 +34,7 @@ class LedOutputPLuginTest(unittest.TestCase):
     def test_colors(self):
         plugin = LedOutputPlugin(FakeLedStrip())
         people = [Person(0, [LandMark(0,0,0) for lm in range(20)], (0,255,0), 0)]
-        self.assertEqual(plugin.calculate_led_colors(people).tolist(), np.array([[0,255,0],[0,0,0]]).tolist())
+        self.assertEqual(plugin.calculate_led_colors(people).tolist(), np.array([[0,0,0],[0,255,0]]).tolist())
 
 
 # Running the tests
