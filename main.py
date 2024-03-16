@@ -53,19 +53,24 @@ def random_color():
 class PoseDetectorPlugin:
     def __init__(self):
         self.name = "posedetector"
-        self.num_poses = 3
+        self.num_poses = 1
 
         model_path = 'pose_landmarker_lite.task'
         options = PoseLandmarkerOptions(
             num_poses=self.num_poses,
             base_options=BaseOptions(model_asset_path=model_path),
             running_mode=VisionRunningMode.LIVE_STREAM,
+            min_pose_presence_confidence=0.7,
+            min_tracking_confidence=0.7,
             result_callback=self.detection_callback)
 
         self.landmarker = PoseLandmarker.create_from_options(options)
 
         self.people = {}
-        self.tracker = Tracker()
+        self.tracker = Tracker(self.distance_metric)
+
+    def distance_metric(self, a, b):
+        return np.linalg.norm(a[0].x - b[0].x)
 
     def stop(self):
         pass
@@ -77,7 +82,7 @@ class PoseDetectorPlugin:
         self.landmarker.detect_async(mp_image, int(time.time()*1000))
 
     def detection_callback(self, detection_result, frame, foo):
-        last_track_result = self.tracker.update(detection_result)
+        last_track_result = self.tracker.update(detection_result.pose_landmarks)
         tracked, disappeared = last_track_result
 
         removable = set(self.people.keys()) - set(tracked.keys())
@@ -268,7 +273,12 @@ class StickFigurePlugin:
         h,w = frame.shape[0], frame.shape[1]
         for person in context["people"].values():
             nose = person.landmarks[0]
-            cv2.circle(frame, (int(nose.x *w ), int(nose.y *h)), 5, (255,255,255), 5)
+            wrist_l = person.landmarks[15]
+            wrist_r = person.landmarks[16]
+            points = [nose, wrist_l, wrist_r]
+
+            for point in points:
+                cv2.circle(frame, (int(point.x *w ), int(point.y *h)), 5, (255,255,255), 5)
 
 class StdoutPlugin:
     def __init__(self):
@@ -391,16 +401,19 @@ class StreamingServer(socketserver.ThreadingMixIn, server.HTTPServer):
 
 
 def main():
+    #camera = PiCamera()
     #camera = CV2Camera()
-    camera = PiCamera()
     #camera = CV2VideoSource('experiments/output.avi')
-    #camera = CV2VideoSource('experiments/lights-on.h264')
+    camera = CV2VideoSource('experiments/lights-on.h264')
     app = Application(camera)
 
     app.register_plugin(PoseDetectorPlugin())
     app.register_plugin(BlobCalculatorPlugin())
     #app.register_plugin(StdoutPlugin())
-    app.register_plugin(LedOutputPlugin(LedStrip(60)))
+    #try:
+    #    app.register_plugin(LedOutputPlugin(LedStrip(60)))
+    #except NameError:
+    #    print("OOPS NO LED STRIP. Try running as root")
     app.register_plugin(LedMonitorPlugin())
     app.register_plugin(StickFigurePlugin())
 
