@@ -189,6 +189,27 @@ class CV2Camera:
     def release(self):
         self.cap.release()
 
+class CV2VideoSource:
+    def __init__(self, file, loop=True):
+        self.cap = cv2.VideoCapture(file)
+        self.file = file
+        self.fps = self.cap.get(cv2.CAP_PROP_FPS)
+
+    def get_frame(self):
+        ret, frame = self.cap.read()
+        if not ret:
+            # Seeking didn't seem to go well, so just creating a new capture instance
+            self.cap.release()
+            self.cap = cv2.VideoCapture(self.file)
+            ret,frame = self.cap.read()
+
+        delay_time = int(1000 / self.fps)
+        cv2.waitKey(delay_time)
+        return frame
+
+    def release(self):
+        self.cap.release()
+
 
 class Application:
     def __init__(self, camera):
@@ -296,20 +317,6 @@ def scaled_bell_curve(x, mean, std_dev):
     return bell_curve(x, mean, std_dev) / (std_dev * np.sqrt(2 * np.pi))
 
 
-def main():
-    #camera = CV2Camera()
-    camera = PiCamera()
-    app = Application(camera)
-
-    app.register_plugin(PoseDetectorPlugin())
-    app.register_plugin(BlobCalculatorPlugin())
-    #app.register_plugin(StdoutPlugin())
-    app.register_plugin(LedOutputPlugin(LedStrip(60)))
-    app.register_plugin(LedMonitorPlugin())
-    app.register_plugin(StickFigurePlugin())
-
-    app.start()
-
 PAGE = """\
 <html>
 <head>
@@ -362,7 +369,7 @@ class StreamingHandler(server.BaseHTTPRequestHandler):
                 while True:
                     with self.output.condition:
                         self.output.condition.wait()
-                        ret, buf = cv2.imencode('.jpg', cv2.cvtColor(self.output.frame , cv2.COLOR_BGR2RGB))
+                        ret, buf = cv2.imencode('.jpg', self.output.frame)
                     self.wfile.write(b'--FRAME\r\n')
                     self.send_header('Content-Type', 'image/jpeg')
                     self.send_header('Content-Length', len(buf))
@@ -383,6 +390,22 @@ class StreamingServer(socketserver.ThreadingMixIn, server.HTTPServer):
     daemon_threads = True
 
 
-if __name__ == "__main__":
+def main():
+    #camera = CV2Camera()
+    camera = PiCamera()
+    #camera = CV2VideoSource('experiments/output.avi')
+    #camera = CV2VideoSource('experiments/lights-on.h264')
+    app = Application(camera)
 
+    app.register_plugin(PoseDetectorPlugin())
+    app.register_plugin(BlobCalculatorPlugin())
+    #app.register_plugin(StdoutPlugin())
+    app.register_plugin(LedOutputPlugin(LedStrip(60)))
+    app.register_plugin(LedMonitorPlugin())
+    app.register_plugin(StickFigurePlugin())
+
+    app.start()
+
+
+if __name__ == "__main__":
     main()
