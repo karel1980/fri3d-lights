@@ -119,11 +119,13 @@ class ObjectDetectorPlugin:
             base_options=BaseOptions(model_asset_path=model_path),
             running_mode=VisionRunningMode.LIVE_STREAM,
             max_results=5,
-            result_callback=self.detection_callback)
+            result_callback=self.detection_callback,
+            category_allowlist=["person"],
+            score_threshold = 0.3)
 
         self.detector = ObjectDetector.create_from_options(options)
 
-        self.objects = {}
+        self.objects = None
         #self.tracker = Tracker(self.distance_metric)
 
     def distance_metric(self, a, b):
@@ -241,7 +243,7 @@ class PiCamera:
 
 class CV2Camera:
     def __init__(self):
-        self.cap = cv2.VideoCapture()
+        self.cap = cv2.VideoCapture(0)
 
     def get_frame(self):
         ret, frame = self.cap.read()
@@ -337,6 +339,36 @@ class StickFigurePlugin:
 
             for point in points:
                 cv2.circle(frame, (int(point.x *w ), int(point.y *h)), 5, (255,255,255), 5)
+
+class DrawBoundingBoxPlugin:
+    def __init__(self):
+        pass
+
+    def stop(self):
+        pass
+
+    def process(self, frame, context):
+        pass
+    
+    def postprocess(self, frame, context):
+        if "objects" not in context:
+            return
+        objects = context["objects"]
+        if objects is None:
+            return
+
+        for d in objects.detections:
+            bb = d.bounding_box
+            topleft = (bb.origin_x, bb.origin_y)
+            bottomright = (bb.origin_x + bb.width, bb.origin_y + bb.height)
+            cv2.rectangle(frame, topleft, bottomright, (0,255,255), 5)
+
+            font = cv2.FONT_HERSHEY_SIMPLEX
+            scale = 1
+            color = (0, 255, 255)
+            thickness = 2
+            position = (bb.origin_x + 20, bb.origin_y)
+            cv2.putText(frame, d.categories[0].category_name, position, font, scale, color, thickness)
 
 class StdoutPlugin:
     def __init__(self):
@@ -476,6 +508,7 @@ def main():
         print("OOPS NO LED STRIP. Try running as root")
     app.register_plugin(LedMonitorPlugin())
     app.register_plugin(StickFigurePlugin())
+    app.register_plugin(DrawBoundingBoxPlugin())
 
     app.start()
 
