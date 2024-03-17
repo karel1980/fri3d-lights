@@ -166,7 +166,27 @@ class ObjectDetectorPlugin:
     def postprocess(self, frame, context):
         return frame
 
-class BlobCalculatorPlugin:
+
+class ObjectToBlobCalculatorPlugin:
+    def process(self, frame, context):
+        objects = context.get("objects", None)
+        if objects is None:
+            return
+
+        blobs = []
+        for d in objects.detections:
+            bb = d.bounding_box
+            mu = (bb.origin_x + bb.width / 2) / frame.shape[1]
+            sigma = 0.1
+            blobs.append((mu, sigma, (0,255,0)))
+        
+        context["blobs"] = blobs
+
+    def postprocess(self, frame, context):
+        pass
+
+
+class PeopleToBlobCalculatorPlugin:
     def process(self, frame, context):
         if "people" not in context:
             return
@@ -512,16 +532,21 @@ def main():
 
     app = Application(camera)
 
-    app.register_plugin(PoseDetectorPlugin())
+    #app.register_plugin(PoseDetectorPlugin())
+    #app.register_plugin(PeopleToBlobCalculatorPlugin())
+
     app.register_plugin(ObjectDetectorPlugin())
-    app.register_plugin(BlobCalculatorPlugin())
+    app.register_plugin(ObjectToBlobCalculatorPlugin())
+
     #app.register_plugin(StdoutPlugin())
+
     try:
         app.register_plugin(LedOutputPlugin(LedStrip(60)))
     except NameError:
         print("OOPS NO LED STRIP. Try running as root")
+
     app.register_plugin(LedMonitorPlugin())
-    app.register_plugin(StickFigurePlugin())
+    #app.register_plugin(StickFigurePlugin())
     app.register_plugin(DrawBoundingBoxPlugin())
 
     app.start()
