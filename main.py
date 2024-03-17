@@ -211,17 +211,17 @@ class LedOutputPlugin:
         pass
 
     def process(self, frame, context):
-        if "people" in context:
-            led_values = self.calculate_led_colors(context["people"])
-            self.ledstrip.set_array(led_values)
-        pass
+        blobs = context.get("blobs", [])
 
-    def calculate_led_colors(self, people):
+        if blobs:
+            led_values = self.calculate_led_colors(context["blobs"])
+            self.ledstrip.set_array(led_values)
+
+    def calculate_led_colors(self, blobs):
         led_values = np.zeros((self.num_leds, 3), np.uint8)
-        for person in people:
-            color = person.color
-            mu = (person.landmarks[0].x + person.landmarks[15].x + person.landmarks[16].x) / 3
-            sigma = 0.02
+        for blob in blobs:
+            mu, sigma, color = blob
+            sigma /= 5
 
             intensity = bell_curve(np.linspace(1.0, 0.0, self.num_leds), mu, sigma)
             colors = (intensity[:,np.newaxis] * np.array(color)).astype(np.uint8)
@@ -426,7 +426,9 @@ class LedMonitorPlugin:
         pass
     
     def postprocess(self, frame, context):
-        if "blobs" not in context:
+        blobs = context.get("blobs", [])
+
+        if not blobs:
             return
 
         h,w,c = frame.shape
@@ -434,13 +436,14 @@ class LedMonitorPlugin:
         monitor_line = np.zeros((w, c), np.uint8)
         for mu,sigma,color in context["blobs"]:
             color = color if c == 3 else [*color, 255]
-            intensity = (50 * scaled_bell_curve(np.linspace(0.0, 1.0, w), mu, sigma)).astype(np.uint8)
+            intensity = bell_curve(np.linspace(0.0, 1.0, w), mu, sigma)
             channels = np.array(color).astype(np.uint8)
-            layer = intensity[:, np.newaxis].astype(np.uint8) * channels
+            layer = (intensity[:, np.newaxis] * channels).astype(np.uint8)
             monitor_line = np.maximum(monitor_line, layer)
 
-        monitor_height = 10
+        monitor_height = 5
         monitor = np.tile(monitor_line[np.newaxis, :, :], (monitor_height, 1, 1))
+        monitor = monitor_line[np.newaxis,:,:]
         frame[-monitor_height:, :, :] = monitor
             
 
