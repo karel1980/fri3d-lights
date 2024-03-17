@@ -31,10 +31,10 @@ class LedOutputPluginTest(unittest.TestCase):
         self.assertEqual(bell_curve(0,0,.1), 1)
         self.assertEqual(bell_curve(0.5,0.5,99), 1)
 
-    def test_colors(self):
+    def test_calculate_led_colors(self):
         plugin = LedOutputPlugin(FakeLedStrip())
-        people = [Person(0, [LandMark(0,0,0) for lm in range(20)], (0,255,0), 0)]
-        self.assertEqual(plugin.calculate_led_colors(people).tolist(), np.array([[0,0,0],[0,255,0]]).tolist())
+        blobs = [Person(0, None, (0, 0.1), (0, 255, 0))]
+        self.assertEqual(plugin.calculate_led_colors(blobs).tolist(), np.array([[0,0,0],[0,255,0]]).tolist())
 
 
 # Running the tests

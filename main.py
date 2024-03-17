@@ -41,21 +41,26 @@ class Plugin:
         return frame
 
 class Person:
-    def __init__(self, p_id, landmarks, color=None, missing=0):
+    def __init__(self, p_id, data, blob, color=None, missing=0):
         self.p_id = p_id
-        self.landmarks = landmarks
+        self.data = data
+        self.blob = blob
         self.color = random_color() if color is None else color
         self.missing = missing
 
+    def update(self, data, blob):
+        self.data = data
+        self.blob = blob
+
     def __repr__(self):
-        return f"Person {self.p_id} at {self.landmarks[0].x} ({self.missing})"
+        return f"Person {self.p_id} data {self.data} blob {self.blob} ({self.missing})"
 
     def __str__(self):
-        return f"Person {self.p_id} at {self.landmarks[0].x} ({self.missing})"
+        return f"Person {self.p_id} data {self.data} blob {self.blob} ({self.missing})"
 
 
 def random_color():
-    hsv_color = (random.random(), 1.0, 1.0)
+    hsv_color = (random.random(), 0.5, 1.0)
     return [ int(x*256) for x in colorsys.hsv_to_rgb(*hsv_color) ]
 
 class PoseDetectorPlugin:
@@ -98,14 +103,18 @@ class PoseDetectorPlugin:
             del self.people[k]
 
         for k,v in tracked.items():
+            blob = self.to_blob(v)
             if k not in self.people:
-                self.people[k] = Person(k, v)
+                self.people[k] = Person(k, v, blob)
             else:
-                self.people[k].landmarks = v
+                self.people[k].update(v, blob)
 
         for k,v in disappeared.items():
             if k in self.people:
                 self.people[k].missing = v
+
+    def to_blob(self, landmarks):
+        return landmarks[0].x, 0.1
 
 
     def postprocess(self, frame, context):
@@ -128,77 +137,58 @@ class ObjectDetectorPlugin:
 
         self.detector = ObjectDetector.create_from_options(options)
 
-        self.objects = None
-        #self.tracker = Tracker(self.distance_metric)
+        self.people = {}
+        self.tracker = Tracker(self.distance_metric)
 
     def distance_metric(self, a, b):
-        return np.linalg.norm(a[0].x - b[0].x)
+        bb_a = a.bounding_box
+        bb_b = b.bounding_box
+
+        return np.linalg.norm(self.np_box(bb_a) - self.np_box(bb_b))
+
+    def np_box(self, bbox):
+        x,y = bbox.origin_x, bbox.origin_y
+        x2,y2 = x + bbox.width, y + bbox.height
+        return np.array([x,y,x2,y2])
 
     def stop(self):
         pass
 
     def process(self, frame, context):
-        context["objects"] = self.objects
+        context["object_people"] = [ p for p in self.people.values() ]
 
         mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=frame)
         self.detector.detect_async(mp_image, int(time.time()*1000))
 
     def detection_callback(self, detection_result, frame, foo):
-        self.objects = detection_result
-#        last_track_result = self.tracker.update(detection_result.pose_landmarks)
-#        tracked, disappeared = last_track_result
-#
-#        removable = set(self.people.keys()) - set(tracked.keys())
-#        for k in removable:
-#            del self.people[k]
-#
-#        for k,v in tracked.items():
-#            if k not in self.people:
-#                self.people[k] = Person(k, v)
-#            else:
-#                self.people[k].landmarks = v
-#
-#        for k,v in disappeared.items():
-#            if k in self.people:
-#                self.people[k].missing = v
+        w = frame.width
+        last_track_result = self.tracker.update(detection_result.detections)
+        tracked, disappeared = last_track_result
+
+        removable = set(self.people.keys()) - set(tracked.keys())
+        for k in removable:
+            del self.people[k]
+
+        for k,v in tracked.items():
+            blob = self.to_blob(w, v)
+            if k not in self.people:
+                self.people[k] = Person(k, v, blob)
+            else:
+                self.people[k].update(v, blob)
+
+        for k,v in disappeared.items():
+            if k in self.people:
+                self.people[k].missing = v
+
+    def to_blob(self, w, detection):
+        bb = detection.bounding_box
+        c = bb.origin_x + bb.width / 2
+        return c / w, 0.1
 
 
     def postprocess(self, frame, context):
         return frame
 
-
-class ObjectToBlobCalculatorPlugin:
-    def process(self, frame, context):
-        objects = context.get("objects", None)
-        if objects is None:
-            return
-
-        blobs = []
-        for d in objects.detections:
-            bb = d.bounding_box
-            mu = (bb.origin_x + bb.width / 2) / frame.shape[1]
-            sigma = 0.1
-            blobs.append((mu, sigma, (0,255,0)))
-        
-        context["blobs"] = blobs
-
-    def postprocess(self, frame, context):
-        pass
-
-
-class PeopleToBlobCalculatorPlugin:
-    def process(self, frame, context):
-        if "people" not in context:
-            return
-
-        blobs = []
-        for person in context["people"]:
-            blobs.append((person.landmarks[0].x, 0.1, person.color))
-        
-        context["blobs"] = blobs
-
-    def postprocess(self, frame, context):
-        pass
 
 
 class LedOutputPlugin:
@@ -211,25 +201,25 @@ class LedOutputPlugin:
         pass
 
     def process(self, frame, context):
-        blobs = context.get("blobs", [])
+        people = context.get("people", []) + context.get("object_people", [])
 
-        if blobs:
-            led_values = self.calculate_led_colors(context["blobs"])
+        if people:
+            led_values = self.calculate_led_colors(people)
             self.ledstrip.set_array(led_values)
 
-    def calculate_led_colors(self, blobs):
+    def calculate_led_colors(self, people):
         led_values = np.zeros((self.num_leds, 3), np.uint8)
-        for blob in blobs:
-            mu, sigma, color = blob
+        for p in people:
+            mu, sigma = p.blob
             sigma /= 5
 
             intensity = bell_curve(np.linspace(1.0, 0.0, self.num_leds), mu, sigma)
-            colors = (intensity[:,np.newaxis] * np.array(color)).astype(np.uint8)
+            colors = (intensity[:,np.newaxis] * np.array(p.color)).astype(np.uint8)
             led_values = np.maximum(led_values, colors)
 
         return led_values
 
-    def postprocess(self, frame,context):
+    def postprocess(self, frame, context):
         pass
 
 
@@ -355,14 +345,14 @@ class StickFigurePlugin:
     def postprocess(self, frame, context):
         if "people" not in context:
             return
-        pose_landmarks_list = [ p.landmarks for p in context["people"] ]
+        pose_landmarks_list = [ p.data for p in context["people"] ]
         annotated_image = frame
 
         # Loop through the detected poses to visualize.
         for idx in range(len(pose_landmarks_list)):
           pose_landmarks = pose_landmarks_list[idx]
 
-          # Draw the pose landmarks.
+          # Draw the pose data.
           pose_landmarks_proto = landmark_pb2.NormalizedLandmarkList()
           pose_landmarks_proto.landmark.extend([
             landmark_pb2.NormalizedLandmark(x=landmark.x, y=landmark.y, z=landmark.z) for landmark in pose_landmarks
@@ -385,21 +375,21 @@ class DrawBoundingBoxPlugin:
         pass
     
     def postprocess(self, frame, context):
-        if "objects" not in context:
-            return
-        objects = context["objects"]
-        if objects is None:
+        people = context.get("object_people", [])
+
+        if not people:
             return
 
-        for d in objects.detections:
+        for p in people:
+            d = p.data
             bb = d.bounding_box
             topleft = (bb.origin_x, bb.origin_y)
             bottomright = (bb.origin_x + bb.width, bb.origin_y + bb.height)
-            cv2.rectangle(frame, topleft, bottomright, (0,255,255), 5)
+            cv2.rectangle(frame, topleft, bottomright, p.color, 5)
 
             font = cv2.FONT_HERSHEY_SIMPLEX
             scale = 1
-            color = (0, 255, 255)
+            color = p.color
             thickness = 2
             position = (bb.origin_x + 20, bb.origin_y)
             cv2.putText(frame, d.categories[0].category_name, position, font, scale, color, thickness)
@@ -426,15 +416,17 @@ class LedMonitorPlugin:
         pass
     
     def postprocess(self, frame, context):
-        blobs = context.get("blobs", [])
+        people = context.get("people", []) + context.get("object_people", [])
 
-        if not blobs:
+        if not people:
             return
 
         h,w,c = frame.shape
 
         monitor_line = np.zeros((w, c), np.uint8)
-        for mu,sigma,color in context["blobs"]:
+        for p in people:
+            mu,sigma = p.blob
+            color = p.color
             color = color if c == 3 else [*color, 255]
             intensity = bell_curve(np.linspace(0.0, 1.0, w), mu, sigma)
             channels = np.array(color).astype(np.uint8)
@@ -528,18 +520,17 @@ class StreamingServer(socketserver.ThreadingMixIn, server.HTTPServer):
 
 
 def main():
-    camera = PiCamera()
+    #camera = PiCamera()
     #camera = CV2Camera()
     #camera = CV2VideoSource('experiments/output.avi')
-    #camera = CV2VideoSource('experiments/lights-on.h264')
+    camera = CV2VideoSource('experiments/lights-on.h264')
+    #camera = CV2VideoSource('experiments/lights-off.h264')
 
     app = Application(camera)
 
     #app.register_plugin(PoseDetectorPlugin())
-    #app.register_plugin(PeopleToBlobCalculatorPlugin())
 
     app.register_plugin(ObjectDetectorPlugin())
-    app.register_plugin(ObjectToBlobCalculatorPlugin())
 
     #app.register_plugin(StdoutPlugin())
 
