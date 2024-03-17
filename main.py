@@ -15,6 +15,9 @@ import mediapipe as mp
 from mediapipe import solutions
 from mediapipe.framework.formats import landmark_pb2
 
+from sklearn.preprocessing import PolynomialFeatures
+from sklearn.linear_model import LinearRegression
+
 
 BaseOptions = mp.tasks.BaseOptions
 VisionRunningMode = mp.tasks.vision.RunningMode
@@ -41,22 +44,39 @@ class Plugin:
         return frame
 
 class Person:
-    def __init__(self, p_id, data, blob, color=None, missing=0):
+    def __init__(self, p_id, data, color=None, missing=0):
         self.p_id = p_id
-        self.data = data
-        self.blob = blob
         self.color = random_color() if color is None else color
         self.missing = missing
+        self.memory = []
+        self.update(data)
 
-    def update(self, data, blob):
+    def update(self, data):
         self.data = data
-        self.blob = blob
+        self.memory.append([data[1][0], data[2]])
+        if len(self.memory) > 10:
+            self.memory.pop(0)
+        self.update_predictor()
+
+    def update_predictor(self):
+        xy = np.array(self.memory)
+        X = np.array(self.memory)[:, 0].reshape(-1, 1)
+        y = np.array(self.memory)[:, 1]
+        poly_degree = 3
+        poly_features = PolynomialFeatures(degree=poly_degree)
+        X_poly = poly_features.fit_transform(X)
+        model = LinearRegression()
+        model.fit(X_poly, y)
+        self.predictor = model
+
+    def predict(self, x):
+        return self.predictor.predict([[x]])[0]
 
     def __repr__(self):
-        return f"Person {self.p_id} data {self.data} blob {self.blob} ({self.missing})"
+        return f"Person {self.p_id} data {self.data} ({self.missing})"
 
     def __str__(self):
-        return f"Person {self.p_id} data {self.data} blob {self.blob} ({self.missing})"
+        return f"Person {self.p_id} data {self.data} ({self.missing})"
 
 
 def random_color():
@@ -94,7 +114,7 @@ class PoseDetectorPlugin:
         mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=frame)
         self.landmarker.detect_async(mp_image, int(time.time()*1000))
 
-    def detection_callback(self, detection_result, frame, foo):
+    def detection_callback(self, detection_result, frame, detection_timestamp):
         last_track_result = self.tracker.update(detection_result.pose_landmarks)
         tracked, disappeared = last_track_result
 
@@ -105,9 +125,9 @@ class PoseDetectorPlugin:
         for k,v in tracked.items():
             blob = self.to_blob(v)
             if k not in self.people:
-                self.people[k] = Person(k, v, blob)
+                self.people[k] = Person(k, (v, blob, detection_timestamp))
             else:
-                self.people[k].update(v, blob)
+                self.people[k].update((v, blob, detection_timestamp))
 
         for k,v in disappeared.items():
             if k in self.people:
@@ -160,7 +180,9 @@ class ObjectDetectorPlugin:
         mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=frame)
         self.detector.detect_async(mp_image, int(time.time()*1000))
 
-    def detection_callback(self, detection_result, frame, foo):
+    def detection_callback(self, detection_result, frame, detection_timestamp):
+        ts = float(detection_timestamp if detection_timestamp.__class__ == int else detection_timestamp.value)
+        
         w = frame.width
         last_track_result = self.tracker.update(detection_result.detections)
         tracked, disappeared = last_track_result
@@ -172,9 +194,9 @@ class ObjectDetectorPlugin:
         for k,v in tracked.items():
             blob = self.to_blob(w, v)
             if k not in self.people:
-                self.people[k] = Person(k, v, blob)
+                self.people[k] = Person(k, (v, blob, ts))
             else:
-                self.people[k].update(v, blob)
+                self.people[k].update((v, blob, ts))
 
         for k,v in disappeared.items():
             if k in self.people:
@@ -210,7 +232,7 @@ class LedOutputPlugin:
     def calculate_led_colors(self, people):
         led_values = np.zeros((self.num_leds, 3), np.uint8)
         for p in people:
-            mu, sigma = p.blob
+            mu, sigma = p.data[1]
             sigma /= 5
 
             intensity = bell_curve(np.linspace(1.0, 0.0, self.num_leds), mu, sigma)
@@ -345,7 +367,7 @@ class StickFigurePlugin:
     def postprocess(self, frame, context):
         if "people" not in context:
             return
-        pose_landmarks_list = [ p.data for p in context["people"] ]
+        pose_landmarks_list = [ p.data[0] for p in context["people"] ]
         annotated_image = frame
 
         # Loop through the detected poses to visualize.
@@ -381,7 +403,7 @@ class DrawBoundingBoxPlugin:
             return
 
         for p in people:
-            d = p.data
+            d = p.data[0]
             bb = d.bounding_box
             topleft = (bb.origin_x, bb.origin_y)
             bottomright = (bb.origin_x + bb.width, bb.origin_y + bb.height)
@@ -425,7 +447,7 @@ class LedMonitorPlugin:
 
         monitor_line = np.zeros((w, c), np.uint8)
         for p in people:
-            mu,sigma = p.blob
+            mu,sigma = p.data[1]
             color = p.color
             color = color if c == 3 else [*color, 255]
             intensity = bell_curve(np.linspace(0.0, 1.0, w), mu, sigma)
@@ -520,18 +542,16 @@ class StreamingServer(socketserver.ThreadingMixIn, server.HTTPServer):
 
 
 def main():
-    camera = PiCamera()
+    #camera = PiCamera()
     #camera = CV2Camera()
     #camera = CV2VideoSource('experiments/output.avi')
-    #camera = CV2VideoSource('experiments/lights-on.h264')
+    camera = CV2VideoSource('experiments/lights-on.h264')
     #camera = CV2VideoSource('experiments/lights-off.h264')
 
     app = Application(camera)
 
     #app.register_plugin(PoseDetectorPlugin())
-
     app.register_plugin(ObjectDetectorPlugin())
-
     #app.register_plugin(StdoutPlugin())
 
     try:
