@@ -520,10 +520,10 @@ class StreamingServer(socketserver.ThreadingMixIn, server.HTTPServer):
 
 
 def main():
-    #camera = PiCamera()
+    camera = PiCamera()
     #camera = CV2Camera()
     #camera = CV2VideoSource('experiments/output.avi')
-    camera = CV2VideoSource('experiments/lights-on.h264')
+    #camera = CV2VideoSource('experiments/lights-on.h264')
     #camera = CV2VideoSource('experiments/lights-off.h264')
 
     app = Application(camera)
