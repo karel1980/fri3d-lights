@@ -214,7 +214,7 @@ class ObjectDetectorPlugin:
 
 
 class LedOutputPlugin:
-    def __init__(self, ledstrip):
+    def __init__(self, ledstrip = None):
         self.name = "ledoutput"
         self.ledstrip = LedStrip(60) if ledstrip is None else ledstrip
         self.num_leds = ledstrip.num_leds
@@ -225,9 +225,8 @@ class LedOutputPlugin:
     def process(self, frame, context):
         people = context.get("people", []) + context.get("object_people", [])
 
-        if people:
-            led_values = self.calculate_led_colors(people)
-            self.ledstrip.set_array(led_values)
+        led_values = self.calculate_led_colors(people)
+        self.ledstrip.set_array(led_values)
 
     def calculate_led_colors(self, people):
         led_values = np.zeros((self.num_leds, 3), np.uint8)
@@ -555,7 +554,7 @@ def main():
     #app.register_plugin(StdoutPlugin())
 
     try:
-        app.register_plugin(LedOutputPlugin(LedStrip(60)))
+        app.register_plugin(LedOutputPlugin(LedStrip(100)))
     except NameError:
         print("OOPS NO LED STRIP. Try running as root")
 
